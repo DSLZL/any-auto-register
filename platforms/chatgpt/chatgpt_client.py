@@ -847,6 +847,8 @@ class ChatGPTClient:
         birthdate,
         skymail_client,
         stop_before_about_you_submission=False,
+        otp_wait_timeout=600,
+        otp_resend_wait_timeout=300,
     ):
         """
         完整的注册流程（基于原版 run_register 方法）
@@ -866,8 +868,18 @@ class ChatGPTClient:
 
         self._log(
             "注册状态机参数: "
-            f"stop_before_about_you_submission={'on' if stop_before_about_you_submission else 'off'}"
+            f"stop_before_about_you_submission={'on' if stop_before_about_you_submission else 'off'}, "
+            f"otp_wait_timeout={otp_wait_timeout}s, otp_resend_wait_timeout={otp_resend_wait_timeout}s"
         )
+
+        try:
+            otp_wait_timeout = max(30, int(otp_wait_timeout or 600))
+        except Exception:
+            otp_wait_timeout = 600
+        try:
+            otp_resend_wait_timeout = max(30, int(otp_resend_wait_timeout or 300))
+        except Exception:
+            otp_resend_wait_timeout = 300
 
         max_auth_attempts = 3
         final_url = ""
@@ -965,9 +977,14 @@ class ChatGPTClient:
 
             if self._state_is_email_otp(state):
                 self._log("等待邮箱验证码...")
-                otp_code = skymail_client.wait_for_verification_code(email, timeout=90)
+                otp_code = skymail_client.wait_for_verification_code(
+                    email, timeout=otp_wait_timeout
+                )
                 if not otp_code:
-                    self._log("首次等待未收到验证码，尝试重发一次 email-otp/send 后再等待 60s")
+                    self._log(
+                        "首次等待未收到验证码，尝试重发一次 email-otp/send "
+                        f"后再等待 {otp_resend_wait_timeout}s"
+                    )
                     otp_send_attempts += 1
                     resend_ok = self.send_email_otp(
                         referer=state.current_url or state.continue_url or f"{self.AUTH}/email-verification"
@@ -976,7 +993,9 @@ class ChatGPTClient:
                         self._log(f"重发验证码成功: attempt={otp_send_attempts}")
                     else:
                         self._log(f"重发验证码失败: attempt={otp_send_attempts}")
-                    otp_code = skymail_client.wait_for_verification_code(email, timeout=60)
+                    otp_code = skymail_client.wait_for_verification_code(
+                        email, timeout=otp_resend_wait_timeout
+                    )
                 if not otp_code:
                     return False, "未收到验证码"
 

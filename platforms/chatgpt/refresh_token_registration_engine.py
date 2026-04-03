@@ -214,6 +214,27 @@ class RefreshTokenRegistrationEngine:
         )
         return any(marker in text for marker in markers)
 
+    def _read_int_config(
+        self,
+        primary_key: str,
+        *,
+        fallback_keys: tuple[str, ...] = (),
+        default: int,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        keys = (primary_key, *tuple(fallback_keys or ()))
+        for key in keys:
+            if key not in self.extra_config:
+                continue
+            value = self.extra_config.get(key)
+            try:
+                parsed = int(value)
+            except Exception:
+                continue
+            return max(minimum, min(parsed, maximum))
+        return max(minimum, min(int(default), maximum))
+
     def _build_chatgpt_client(self) -> ChatGPTClient:
         client = ChatGPTClient(
             proxy=self.proxy_url,
@@ -314,6 +335,20 @@ class RefreshTokenRegistrationEngine:
         result = RegistrationResult(success=False, logs=self.logs)
         last_error = ""
         fixed_email = str(self.email or "").strip()
+        register_otp_wait_seconds = self._read_int_config(
+            "chatgpt_register_otp_wait_seconds",
+            fallback_keys=("chatgpt_otp_wait_seconds",),
+            default=600,
+            minimum=30,
+            maximum=3600,
+        )
+        register_otp_resend_wait_seconds = self._read_int_config(
+            "chatgpt_register_otp_resend_wait_seconds",
+            fallback_keys=("chatgpt_register_otp_wait_seconds", "chatgpt_otp_wait_seconds"),
+            default=300,
+            minimum=30,
+            maximum=3600,
+        )
 
         try:
             for attempt in range(self.max_retries):
@@ -355,6 +390,12 @@ class RefreshTokenRegistrationEngine:
                     self._log(f"密码: {self.password}")
                     self._log(f"注册信息: {first_name} {last_name}, 生日: {birthdate}")
                     self._log("流程策略: 注册阶段到 about_you 即停，改由 OAuth 新会话补全资料")
+                    self._log(
+                        "验证码等待策略: "
+                        f"register_wait={register_otp_wait_seconds}s, "
+                        f"register_resend_wait={register_otp_resend_wait_seconds}s, "
+                        "oauth_wait=读取 OAuthClient 配置（默认600s）"
+                    )
 
                     email_adapter = EmailServiceAdapter(
                         self.email_service,
@@ -372,6 +413,8 @@ class RefreshTokenRegistrationEngine:
                         birthdate,
                         email_adapter,
                         stop_before_about_you_submission=True,
+                        otp_wait_timeout=register_otp_wait_seconds,
+                        otp_resend_wait_timeout=register_otp_resend_wait_seconds,
                     )
 
                     if not registered:

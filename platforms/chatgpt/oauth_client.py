@@ -1911,8 +1911,23 @@ class OAuthClient:
             skymail_client._used_codes = set()
 
         tried_codes = set(getattr(skymail_client, "_used_codes", set()))
-        otp_deadline = time.time() + 60
+        try:
+            otp_wait_seconds = int(
+                self.config.get(
+                    "chatgpt_oauth_otp_wait_seconds",
+                    self.config.get("chatgpt_otp_wait_seconds", 600),
+                )
+                or 600
+            )
+        except Exception:
+            otp_wait_seconds = 600
+        otp_wait_seconds = max(30, min(otp_wait_seconds, 3600))
+        otp_poll_window = min(30, max(10, otp_wait_seconds))
+        otp_deadline = time.time() + otp_wait_seconds
         otp_sent_at = time.time()
+        self._log(
+            f"OAuth OTP 等待窗口: total={otp_wait_seconds}s, poll_window={otp_poll_window}s"
+        )
 
         def validate_otp(code):
             tried_codes.add(code)
@@ -1958,7 +1973,7 @@ class OAuthClient:
             self._log("使用 wait_for_verification_code 进行阻塞式获取新验证码...")
             while time.time() < otp_deadline:
                 remaining = max(1, int(otp_deadline - time.time()))
-                wait_time = min(10, remaining)
+                wait_time = min(otp_poll_window, remaining)
                 try:
                     code = skymail_client.wait_for_verification_code(
                         email,
@@ -1997,8 +2012,8 @@ class OAuthClient:
                         candidate_codes.append(code)
 
                 if not candidate_codes:
-                    elapsed = int(60 - max(0, otp_deadline - time.time()))
-                    self._log(f"等待新的 OTP... ({elapsed}s/60s)")
+                    elapsed = int(otp_wait_seconds - max(0, otp_deadline - time.time()))
+                    self._log(f"等待新的 OTP... ({elapsed}s/{otp_wait_seconds}s)")
                     time.sleep(2)
                     continue
 
@@ -2013,6 +2028,6 @@ class OAuthClient:
 
         if not self.last_error:
             self._set_error(
-                f"OAuth 阶段 OTP 验证失败，已尝试 {len(tried_codes)} 个验证码"
+                f"OAuth 阶段 OTP 验证失败，已尝试 {len(tried_codes)} 个验证码，等待窗口 {otp_wait_seconds}s"
             )
         return None
